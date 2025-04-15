@@ -15,40 +15,112 @@ import {
   TableHead,
   TableRow,
   Divider,
+  Alert,
+  Snackbar,
 } from "@mui/material";
 
 function App() {
   const [file, setFile] = useState(null);
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [disableInsert, setDisableInsert] = useState(true);
+  const [insertLoading, setInsertLoading] = useState(false);
+  const [snackbar, setSnackbar] = useState({
+    open: false,
+    message: "",
+    severity: "success",
+  });
 
-  const handleFileChange = (e) => setFile(e.target.files[0]);
+  const handleFileChange = (e) => {
+    setFile(e.target.files[0]);
+    setResult(null); // Reset result when new file is selected
+  };
 
   const handleUpload = async () => {
-    if (!file) return alert("Please select a file first");
+    if (!file) {
+      setSnackbar({
+        open: true,
+        message: "Please select a file first",
+        severity: "error",
+      });
+      return;
+    }
 
     const formData = new FormData();
     formData.append("file", file);
 
     try {
       setLoading(true);
+      // Changed endpoint to validation endpoint
       const res = await axios.post(
-        "http://localhost:5000/api/upload",
+        "http://localhost:5000/api/validate",
         formData
       );
       setResult(res.data);
-      setDisableInsert(res.data.invalidRecords.length > 0);
+
+      if (res.data.allValid) {
+        setSnackbar({
+          open: true,
+          message: "All records are valid! You can now insert the data.",
+          severity: "success",
+        });
+      } else {
+        setSnackbar({
+          open: true,
+          message: `Found ${res.data.invalid} invalid records. Please fix and re-upload.`,
+          severity: "warning",
+        });
+      }
     } catch (err) {
-      alert("Upload failed");
+      setSnackbar({
+        open: true,
+        message: err.response?.data?.message || "Upload failed",
+        severity: "error",
+      });
       console.error(err);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleInsert = () => {
-    alert("Insert button clicked! Records inserted on backend.");
+  const handleInsert = async () => {
+    if (!result || !result.sessionId) {
+      setSnackbar({
+        open: true,
+        message: "Please validate the file first",
+        severity: "error",
+      });
+      return;
+    }
+
+    try {
+      setInsertLoading(true);
+      const res = await axios.post("http://localhost:5000/api/insert", {
+        sessionId: result.sessionId,
+      });
+
+      setSnackbar({
+        open: true,
+        message: `Successfully inserted ${res.data.inserted} records!`,
+        severity: "success",
+      });
+
+      // Reset result to force user to validate again for next insertion
+      setResult(null);
+      setFile(null);
+    } catch (err) {
+      setSnackbar({
+        open: true,
+        message: err.response?.data?.message || "Insertion failed",
+        severity: "error",
+      });
+      console.error(err);
+    } finally {
+      setInsertLoading(false);
+    }
+  };
+
+  const handleCloseSnackbar = () => {
+    setSnackbar({ ...snackbar, open: false });
   };
 
   const handleDownloadInvalidRecords = () => {
@@ -130,6 +202,31 @@ function App() {
     );
   };
 
+  const renderValidationSummary = () => {
+    if (!result) return null;
+
+    return (
+      <Box
+        mt={3}
+        display="flex"
+        justifyContent="center"
+        gap={2}
+        flexWrap="wrap"
+      >
+        <Alert
+          severity={result.allValid ? "success" : "warning"}
+          sx={{ width: "100%" }}
+        >
+          <Typography variant="body1">
+            <strong>Total Records:</strong> {result.total} |
+            <strong> Valid:</strong> {result.valid} |<strong> Invalid:</strong>{" "}
+            {result.invalid}
+          </Typography>
+        </Alert>
+      </Box>
+    );
+  };
+
   return (
     <Container maxWidth="md" sx={{ mt: 6, mb: 6 }}>
       <Paper elevation={4} sx={{ p: 5, borderRadius: 3 }}>
@@ -140,7 +237,7 @@ function App() {
           fontWeight="bold"
           color="primary"
         >
-          Excel to PostgreSQL Upload
+          Import Data From Excel to DB
         </Typography>
 
         <Divider sx={{ mb: 3 }} />
@@ -150,6 +247,7 @@ function App() {
             type="file"
             onChange={handleFileChange}
             inputProps={{ accept: ".xlsx, .xls, .csv" }}
+            value={file ? undefined : ""}
           />
         </Box>
 
@@ -161,17 +259,17 @@ function App() {
             disabled={loading}
             sx={{ minWidth: "120px" }}
           >
-            {loading ? <CircularProgress size={24} /> : "Upload"}
+            {loading ? <CircularProgress size={24} /> : "Validate"}
           </Button>
 
           <Button
             variant="contained"
             color="success"
             onClick={handleInsert}
-            disabled={disableInsert}
+            disabled={!result || !result.allValid || insertLoading}
             sx={{ minWidth: "120px" }}
           >
-            Insert
+            {insertLoading ? <CircularProgress size={24} /> : "Insert"}
           </Button>
         </Box>
 
@@ -181,10 +279,26 @@ function App() {
               <strong>Table Name:</strong> {result.table}
             </Typography>
 
+            {renderValidationSummary()}
             {renderTablePreview()}
           </Box>
         )}
       </Paper>
+
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={6000}
+        onClose={handleCloseSnackbar}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <Alert
+          onClose={handleCloseSnackbar}
+          severity={snackbar.severity}
+          sx={{ width: "100%" }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Container>
   );
 }

@@ -9,5 +9,9 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-router.post("/upload", upload.single("file"), uploadExcel.uploadExcel);
+//router.post("/upload", upload.single("file"), uploadExcel.uploadExcel);
+
+router.post("/validate", upload.single("file"), uploadExcel.validateExcel);
+
+router.post("/insert", uploadExcel.insertData);
 module.exports = router;

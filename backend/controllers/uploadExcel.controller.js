@@ -72,7 +72,7 @@ const normalizeValue = (value, dataType) => {
   return value;
 };
 
-exports.uploadExcel = async (req, res) => {
+exports.validateExcel = async (req, res) => {
   try {
     const filePath = req.file.path;
     const fileName = path
@@ -105,12 +105,12 @@ exports.uploadExcel = async (req, res) => {
     const columnNames = mappedHeaders.map((m) => `"${m.sanitized}"`);
     const insertColumns = mappedHeaders.map((m) => m.sanitized);
 
+    // Create table if it doesn't exist
     await pool.query(
       `CREATE TABLE IF NOT EXISTS "${fileName}" (${columnDefs.join(", ")});`
     );
 
     const invalidRecords = [];
-
     const values = data.map((row, rowIndex) => {
       try {
         return insertColumns.map((col) => {
@@ -141,32 +141,122 @@ exports.uploadExcel = async (req, res) => {
     const validValues = values.filter((v) => v !== null);
     console.log("Valid records:", validValues.length);
     console.log("Invalid records:", invalidRecords.length);
-    if (validValues.length > 0) {
-      const insertQuery = format(
-        `INSERT INTO "${fileName}" (${columnNames.join(", ")}) VALUES %L`,
-        validValues
-      );
-      await pool.query(insertQuery);
-      console.log("Inserted records into DB:", validValues.length);
+
+    // Store the validated data in a temporary file for later insertion
+    const sessionId =
+      Date.now().toString(36) + Math.random().toString(36).substr(2);
+    const tempDataPath = path.join(
+      __dirname,
+      "..",
+      "temp",
+      `${sessionId}.json`
+    );
+
+    // Make sure temp directory exists
+    if (!fs.existsSync(path.join(__dirname, "..", "temp"))) {
+      fs.mkdirSync(path.join(__dirname, "..", "temp"));
     }
+
+    // Save validation results for later use
+    fs.writeFileSync(
+      tempDataPath,
+      JSON.stringify({
+        fileName,
+        columnNames,
+        values: validValues,
+        date: new Date().toISOString(),
+      })
+    );
 
     const columnMap = mappedHeaders.reduce((acc, curr) => {
       acc[curr.original] = curr.sanitized;
       return acc;
     }, {});
 
-    fs.unlinkSync(filePath);
+    // Keep original file for reference, or uncomment to remove it
+    // fs.unlinkSync(filePath);
 
     res.status(200).json({
-      message: "Excel processed",
+      message: "Excel validated",
       table: fileName,
       columnMap,
-      inserted: validValues.length,
-      failed: invalidRecords.length,
+      sessionId,
+      total: data.length,
+      valid: validValues.length,
+      invalid: invalidRecords.length,
+      allValid: invalidRecords.length === 0,
       invalidRecords,
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: "Error while uploading Excel", error });
+    res
+      .status(500)
+      .json({ message: "Error while validating Excel", error: error.message });
+  }
+};
+
+// Insert data to database after validation
+exports.insertData = async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+
+    if (!sessionId) {
+      return res.status(400).json({ message: "Session ID is required" });
+    }
+
+    const tempDataPath = path.join(
+      __dirname,
+      "..",
+      "temp",
+      `${sessionId}.json`
+    );
+
+    if (!fs.existsSync(tempDataPath)) {
+      return res
+        .status(404)
+        .json({ message: "Validation session not found or expired" });
+    }
+
+    const sessionData = JSON.parse(fs.readFileSync(tempDataPath));
+
+    // Check if data is still valid (optional: add an expiration check)
+    const sessionDate = new Date(sessionData.date);
+    const now = new Date();
+    if (now - sessionDate > 30 * 60 * 1000) {
+      // 30 minutes expiration
+      fs.unlinkSync(tempDataPath);
+      return res
+        .status(400)
+        .json({ message: "Validation session expired, please re-upload" });
+    }
+
+    // Check if we have any valid records to insert
+    if (!sessionData.values.length) {
+      return res.status(400).json({ message: "No valid records to insert" });
+    }
+
+    // Insert the data
+    const insertQuery = format(
+      `INSERT INTO "${sessionData.fileName}" (${sessionData.columnNames.join(
+        ", "
+      )}) VALUES %L`,
+      sessionData.values
+    );
+
+    const result = await pool.query(insertQuery);
+
+    // Clean up the temp file
+    fs.unlinkSync(tempDataPath);
+
+    res.status(200).json({
+      message: "Data inserted successfully",
+      table: sessionData.fileName,
+      inserted: result.rowCount || sessionData.values.length,
+    });
+  } catch (error) {
+    console.error(error);
+    res
+      .status(500)
+      .json({ message: "Error inserting data", error: error.message });
   }
 };
