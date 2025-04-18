@@ -86,7 +86,9 @@ exports.validateExcel = async (req, res) => {
       defval: null,
     });
     console.log("Total records read from Excel:", data.length);
+    console.log(" JSON Preview:\n", JSON.stringify(data, null, 2));
 
+    // console.log("Data format: ", data);
     if (!data.length) {
       return res.status(400).json({ message: "Excel is empty" });
     }
